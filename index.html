@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ランダム図鑑：番号＋日本語名（PokeAPI）</title>
+  <style>
+    :root { --radius: 14px; }
+    * { box-sizing: border-box; }
+    body {
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic", "Meiryo", Arial, sans-serif;
+      margin: 0; padding: 24px;
+      background: #fff7fb;
+      color: #222;
+    }
+    .card {
+      max-width: 680px; margin: 0 auto;
+      background: #fff; border-radius: var(--radius);
+      box-shadow: 0 4px 18px rgba(0,0,0,.08);
+      padding: 22px;
+      border: 1px solid #f2e2ee;
+    }
+    h1 {
+      font-size: 1.25rem; margin: 0 0 10px; letter-spacing: .02em;
+    }
+    p.lead { margin: 0 0 18px; color: #555; }
+    .controls {
+      display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+      margin-bottom: 16px;
+    }
+    button {
+      appearance: none;
+      border: 0; border-radius: 999px;
+      padding: 12px 18px; font-size: 1rem; font-weight: 700;
+      background: linear-gradient(180deg,#ffd9ec,#ffb6da);
+      cursor: pointer; box-shadow: 0 8px 16px rgba(255, 73, 143, .18);
+      transition: transform .05s ease;
+    }
+    button:hover { transform: translateY(-1px); }
+    button:disabled { opacity: .6; cursor: not-allowed; transform: none; }
+    .result {
+      display: grid; grid-template-columns: auto 1fr; gap: 10px 16px;
+      align-items: center; border-top: 1px dashed #f0d3e7; padding-top: 14px;
+      min-height: 64px;
+    }
+    .label { color: #8a5a74; font-weight: 700; }
+    .value { font-variant-numeric: tabular-nums; font-weight: 800; font-size: 1.15rem; }
+    .muted { color: #777; font-size: .9rem; }
+    .error { color: #b00020; font-weight: 700; }
+    footer { margin-top: 20px; color: #777; font-size: .85rem; }
+    code { background: #fff0f6; padding: 2px 6px; border-radius: 6px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>ランダム図鑑（番号＋日本語名）</h1>
+    <p class="lead">ボタンを押すと、PokeAPIからランダムに1種を取得して「全国図鑑番号」と「日本語名」を表示します。</p>
+
+    <div class="controls">
+      <button id="drawBtn" type="button">ランダムに引く</button>
+      <span id="hint" class="muted">（通信が発生します）</span>
+    </div>
+
+    <div id="result" class="result" aria-live="polite">
+      <div class="label">番号</div><div class="value" id="dexNo">—</div>
+      <div class="label">名前</div><div class="value" id="nameJa">—</div>
+    </div>
+
+    <footer>
+      データ提供：<a href="https://pokeapi.co/" target="_blank" rel="noopener noreferrer">PokeAPI</a>。
+      日本語名は <code>pokemon-species</code> の <code>names[language=ja-Hrkt/ja]</code> を参照します。
+    </footer>
+  </div>
+
+  <script>
+    (() => {
+      const btn = document.getElementById('drawBtn');
+      const dexEl = document.getElementById('dexNo');
+      const nameEl = document.getElementById('nameJa');
+      const hint = document.getElementById('hint');
+
+      let totalSpecies = null;
+      let inFlightController = null;
+
+      async function fetchJSON(url, signal) {
+        const res = await fetch(url, { signal });
+        if (!res.ok) throw new Error(`HTTP ${res.status} @ ${url}`);
+        return res.json();
+      }
+
+      async function getTotalSpeciesCount(signal) {
+        if (typeof totalSpecies === 'number') return totalSpecies;
+        const meta = await fetchJSON('https://pokeapi.co/api/v2/pokemon-species?limit=0', signal);
+        totalSpecies = meta.count;
+        return totalSpecies;
+      }
+
+      function pad4(n) {
+        return String(n).padStart(4, '0');
+      }
+
+      async function drawRandom() {
+        if (inFlightController) inFlightController.abort();
+        inFlightController = new AbortController();
+        const { signal } = inFlightController;
+
+        btn.disabled = true;
+        const oldText = btn.textContent;
+        btn.textContent = '取得中…';
+
+        try {
+          const count = await getTotalSpeciesCount(signal);
+          const offset = Math.floor(Math.random() * count);
+          const list = await fetchJSON(`https://pokeapi.co/api/v2/pokemon-species?limit=1&offset=${offset}`, signal);
+          if (!list.results || !list.results.length) throw new Error('データが空でした');
+          const speciesUrl = list.results[0].url;
+
+          const species = await fetchJSON(speciesUrl, signal);
+          const id = species.id;
+
+          const names = Array.isArray(species.names) ? species.names : [];
+          const jaHrkt = names.find(n => n.language?.name === 'ja-Hrkt');
+          const ja = names.find(n => n.language?.name === 'ja');
+          const en = names.find(n => n.language?.name === 'en');
+          const jpName = (jaHrkt && jaHrkt.name) || (ja && ja.name) || (en && en.name) || species.name || '（名称不明）';
+
+          dexEl.textContent = `No.${pad4(id)}`;
+          nameEl.textContent = jpName;
+
+          hint.textContent = `全 ${count} 種からランダム取得しました。`;
+        } catch (err) {
+          if (err.name === 'AbortError') return;
+          dexEl.textContent = '—';
+          nameEl.innerHTML = `<span class="error">エラー：${err.message}</span>`;
+          hint.textContent = 'もう一度お試しください。';
+          console.error(err);
+        } finally {
+          btn.textContent = oldText;
+          btn.disabled = false;
+          inFlightController = null;
+        }
+      }
+
+      btn.addEventListener('click', drawRandom, { passive: true });
+    })();
+  </script>
+</body>
+</html>
